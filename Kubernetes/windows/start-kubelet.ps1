@@ -1,11 +1,8 @@
-Param(
-    $clusterCIDR="192.168.0.0/16"
+param(
+    [int]$Verbosity=0
 )
 
-# Todo : Get these values using kubectl
-$KubeDnsServiceIp="11.0.0.10"
-$serviceCIDR="11.0.0.0/8"
-
+$ClusterInfoPath = "c:\k\kubernetes-cluster-info.json"
 $WorkingDir = "c:\k"
 $CNIPath = [Io.path]::Combine($WorkingDir , "cni")
 $NetworkMode = "L2Bridge"
@@ -13,6 +10,46 @@ $CNIConfig = [Io.path]::Combine($CNIPath, "config", "$NetworkMode.conf")
 
 $endpointName = "cbr0"
 $vnicName = "vEthernet ($endpointName)"
+
+
+function
+Get-ClusterInfo()
+{
+    $KubeDnsServiceIp = $(kubectl --namespace kube-system get service kube-dns -o=jsonpath='{.spec.clusterIP}')
+
+    $subnetRegex = "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/\d+"
+
+    $clusterCIDR = ""
+    $serviceCIDR = ""
+
+    if([System.IO.File]::Exists($ClusterInfoPath)){
+        Write-Host "Reading cluster info from $ClusterInfoPath"
+        $clusterInfo = Get-Content -Raw -Path $ClusterInfoPath | ConvertFrom-Json
+        $clusterCIDR = $clusterInfo.cluster_cidr
+        $serviceCIDR = $clusterInfo.service_cidr
+    } else {
+	    Write-Host "Attempting to determine cluster info by examining the kubernetes-master pod"
+        $kubeInfo = $(kubectl -n kube-system get pod kube-controller-manager-kubernetes-master -o jsonpath='{.spec.containers[0].command}')
+
+        $clusterMatches = (Select-String -InputObject $kubeInfo -Pattern "cluster-cidr=$subnetRegex")
+        if ($clusterMatches) {
+            $clusterCIDR = $clusterMatches.Matches[0].value.split('=')[1]
+        }
+
+        $serviceMatches = (Select-String -InputObject $kubeInfo -Pattern "service-cluster-ip-range=$subnetRegex")
+        if ($serviceMatches) {
+            $serviceCIDR = $serviceMatches.Matches[0].value.split('=')[1]
+        }
+    }
+
+    if (!$clusterCIDR -Or !$serviceCIDR -Or !$KubeDnsServiceIp) {
+        Write-Host "Error occurred while determining cluster info"
+        Exit 1
+    }
+    return $clusterCIDR, $serviceCIDR, $KubeDnsServiceIp
+}
+
+$clusterCIDR, $serviceCIDR, $KubeDnsServiceIp = Get-ClusterInfo
 
 function
 Get-PodGateway($podCIDR)
@@ -119,7 +156,7 @@ Update-CNIConfig($podCIDR)
      }]
   },
   "dns" : {
-    "Nameservers" : [ "11.0.0.10" ]
+    "Nameservers" : [ "<KubeDnsServiceIp>" ]
   },
   "AdditionalArgs" : [
     {
@@ -190,26 +227,32 @@ if (-not $podCidrDiscovered)
 
 # startup the service
 ipmo C:\k\hns.psm1
+
 $hnsNetwork = Get-HnsNetworks | ? Name -EQ $NetworkMode.ToLower()
 
-if (!$hnsNetwork)
-{
-    $podGW = Get-PodGateway $podCIDR
-
-    $hnsNetwork = New-HNSNetwork -Type $NetworkMode -AddressPrefix $podCIDR -Gateway $podGW -Name $NetworkMode.ToLower() -Verbose
-    $podEndpointGW = Get-PodEndpointGateway $podCIDR
-
-    $hnsEndpoint = New-HnsEndpoint -NetworkId $hnsNetwork.Id -Name $endpointName -IPAddress $podEndpointGW -Gateway "0.0.0.0" -Verbose
-    Attach-HnsHostEndpoint -EndpointID $hnsEndpoint.Id -CompartmentID 1
-    netsh int ipv4 set int "$vnicName" for=en
-    #netsh int ipv4 set add "vEthernet (cbr0)" static $podGW 255.255.255.0
+if ($hnsNetwork) {
+    # Remove any existing HNS networks. This is a workaround for Internet/NAT routing issues
+    # that occur if the interface is reused or already exists (after a reboot).
+    $hnsNetwork | Remove-HnsNetwork
+    # Sleep to give time for interfaces/connections to reset
+    Start-Sleep 15
 }
+
+$podGW = Get-PodGateway $podCIDR
+
+$hnsNetwork = New-HNSNetwork -Type $NetworkMode -AddressPrefix $podCIDR -Gateway $podGW -Name $NetworkMode.ToLower() -Verbose
+$podEndpointGW = Get-PodEndpointGateway $podCIDR
+
+$hnsEndpoint = New-HnsEndpoint -NetworkId $hnsNetwork.Id -Name $endpointName -IPAddress $podEndpointGW -Gateway "0.0.0.0" -Verbose
+Attach-HnsHostEndpoint -EndpointID $hnsEndpoint.Id -CompartmentID 1
+netsh int ipv4 set int "$vnicName" for=en
+#netsh int ipv4 set add "vEthernet (cbr0)" static $podGW 255.255.255.0
 
 Start-Sleep 10
 # Add route to all other POD networks
 Update-CNIConfig $podCIDR
 
-c:\k\kubelet.exe --hostname-override=$(hostname) --v=6 `
+c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --pod-infra-container-image=kubeletwin/pause --resolv-conf="" `
     --allow-privileged=true --enable-debugging-handlers `
     --cluster-dns=$KubeDnsServiceIp --cluster-domain=cluster.local `
