@@ -15,7 +15,7 @@ $vnicName = "vEthernet ($endpointName)"
 function
 Get-ClusterInfo() {
     if([System.IO.File]::Exists($kubeEnvPath)){
-        Write-Host "Reading cluster info from $ClusterInfoPath"
+        Write-Host "Reading Kubernetes env from $kubeEnvPath"
         $kubeEnv = Get-Content -Raw -Path $kubeEnvPath | ConvertFrom-Json
         $clusterCIDR = $kubeEnv.CLUSTER_IP_RANGE
         $serviceCIDR = $kubeEnv.SERVICE_CLUSTER_IP_RANGE
