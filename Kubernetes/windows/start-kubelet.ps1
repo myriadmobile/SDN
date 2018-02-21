@@ -2,7 +2,7 @@ param(
     [int]$Verbosity=0
 )
 
-$ClusterInfoPath = "c:\k\kubernetes-cluster-info.json"
+$kubeEnvPath = "c:\k\kube-env.json"
 $WorkingDir = "c:\k"
 $CNIPath = [Io.path]::Combine($WorkingDir , "cni")
 $NetworkMode = "L2Bridge"
@@ -13,43 +13,26 @@ $vnicName = "vEthernet ($endpointName)"
 
 
 function
-Get-ClusterInfo()
-{
-    $KubeDnsServiceIp = $(kubectl --namespace kube-system get service kube-dns -o=jsonpath='{.spec.clusterIP}')
-
-    $subnetRegex = "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/\d+"
-
-    $clusterCIDR = ""
-    $serviceCIDR = ""
-
-    if([System.IO.File]::Exists($ClusterInfoPath)){
+Get-ClusterInfo() {
+    if([System.IO.File]::Exists($kubeEnvPath)){
         Write-Host "Reading cluster info from $ClusterInfoPath"
-        $clusterInfo = Get-Content -Raw -Path $ClusterInfoPath | ConvertFrom-Json
-        $clusterCIDR = $clusterInfo.cluster_cidr
-        $serviceCIDR = $clusterInfo.service_cidr
+        $kubeEnv = Get-Content -Raw -Path $kubeEnvPath | ConvertFrom-Json
+        $clusterCIDR = $kubeEnv.CLUSTER_IP_RANGE
+        $serviceCIDR = $kubeEnv.SERVICE_CLUSTER_IP_RANGE
+        $kubeDnsServiceIp = $kubeEnv.DNS_SERVER_IP
     } else {
-	    Write-Host "Attempting to determine cluster info by examining the kubernetes-master pod"
-        $kubeInfo = $(kubectl -n kube-system get pod kube-controller-manager-kubernetes-master -o jsonpath='{.spec.containers[0].command}')
-
-        $clusterMatches = (Select-String -InputObject $kubeInfo -Pattern "cluster-cidr=$subnetRegex")
-        if ($clusterMatches) {
-            $clusterCIDR = $clusterMatches.Matches[0].value.split('=')[1]
-        }
-
-        $serviceMatches = (Select-String -InputObject $kubeInfo -Pattern "service-cluster-ip-range=$subnetRegex")
-        if ($serviceMatches) {
-            $serviceCIDR = $serviceMatches.Matches[0].value.split('=')[1]
-        }
+        Write-Host "Kube env file ($kubeEnvPath) missing"
+        Exit 1
     }
 
-    if (!$clusterCIDR -Or !$serviceCIDR -Or !$KubeDnsServiceIp) {
+    if (!$clusterCIDR -Or !$serviceCIDR -Or !$kubeDnsServiceIp) {
         Write-Host "Error occurred while determining cluster info"
         Exit 1
     }
-    return $clusterCIDR, $serviceCIDR, $KubeDnsServiceIp
+    return $clusterCIDR, $serviceCIDR, $kubeDnsServiceIp
 }
 
-$clusterCIDR, $serviceCIDR, $KubeDnsServiceIp = Get-ClusterInfo
+$clusterCIDR, $serviceCIDR, $kubeDnsServiceIp = Get-ClusterInfo
 
 function
 Get-PodGateway($podCIDR)
@@ -156,7 +139,7 @@ Update-CNIConfig($podCIDR)
      }]
   },
   "dns" : {
-    "Nameservers" : [ "<KubeDnsServiceIp>" ]
+    "Nameservers" : [ "<kubeDnsServiceIp>" ]
   },
   "AdditionalArgs" : [
     {
@@ -176,7 +159,7 @@ Update-CNIConfig($podCIDR)
     $configJson.name = $NetworkMode.ToLower()
     $configJson.ipam.subnet=$podCIDR
     $configJson.ipam.routes[0].GW = Get-PodEndpointGateway $podCIDR
-    $configJson.dns.Nameservers[0] = $KubeDnsServiceIp
+    $configJson.dns.Nameservers[0] = $kubeDnsServiceIp
 
     $configJson.AdditionalArgs[0].Value.ExceptionList[0] = $clusterCIDR
     $configJson.AdditionalArgs[0].Value.ExceptionList[1] = $serviceCIDR
@@ -255,7 +238,7 @@ Update-CNIConfig $podCIDR
 c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --pod-infra-container-image=kubeletwin/pause --resolv-conf="" `
     --allow-privileged=true --enable-debugging-handlers `
-    --cluster-dns=$KubeDnsServiceIp --cluster-domain=cluster.local `
+    --cluster-dns=$kubeDnsServiceIp --cluster-domain=cluster.local `
     --kubeconfig=c:\k\config --hairpin-mode=promiscuous-bridge `
     --image-pull-progress-deadline=20m --cgroups-per-qos=false `
     --enforce-node-allocatable="" `
