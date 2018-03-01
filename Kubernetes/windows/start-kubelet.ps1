@@ -189,7 +189,8 @@ $podCidrDiscovered = Test-PodCIDR $podCIDR
 # if the podCIDR has not yet been assigned to this node, start the kubelet process to get the podCIDR, and then promptly kill it.
 if (-not $podCidrDiscovered)
 {
-    $argList = @("--hostname-override=$(hostname)","--pod-infra-container-image=kubeletwin/pause","--resolv-conf=""""", "--kubeconfig=c:\k\config")
+    Invoke-EnsureGoogleMetadataRoute
+    $argList = @("--hostname-override=$(hostname)","--pod-infra-container-image=kubeletwin/pause","--resolv-conf=""""", "--kubeconfig=c:\k\config","--cloud-provider=gce","--register-with-taints=NodeBooting=true:NoSchedule")
 
     $process = Start-Process -FilePath c:\k\kubelet.exe -PassThru -ArgumentList $argList
 
@@ -234,6 +235,7 @@ netsh int ipv4 set int "$vnicName" for=en
 Start-Sleep 10
 # Add route to all other POD networks
 Update-CNIConfig $podCIDR
+Invoke-EnsureGoogleMetadataRoute
 
 c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --pod-infra-container-image=kubeletwin/pause --resolv-conf="" `
@@ -242,4 +244,5 @@ c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --kubeconfig=c:\k\config --hairpin-mode=promiscuous-bridge `
     --image-pull-progress-deadline=20m --cgroups-per-qos=false `
     --enforce-node-allocatable="" `
-    --network-plugin=cni --cni-bin-dir="c:\k\cni" --cni-conf-dir "c:\k\cni\config"
+    --network-plugin=cni --cni-bin-dir="c:\k\cni" --cni-conf-dir "c:\k\cni\config" `
+    --cloud-provider=gce --register-with-taints=NodeBooting=true:NoSchedule
