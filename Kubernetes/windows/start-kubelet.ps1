@@ -236,6 +236,7 @@ Start-Sleep 10
 # Add route to all other POD networks
 Update-CNIConfig $podCIDR
 Invoke-EnsureGoogleMetadataRoute
+docker-credential-gcr configure-docker
 
 c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --pod-infra-container-image=kubeletwin/pause --resolv-conf="" `
