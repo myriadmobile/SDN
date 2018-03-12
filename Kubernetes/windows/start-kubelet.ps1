@@ -2,16 +2,17 @@ param(
     [int]$Verbosity=0
 )
 
-$kubeEnvPath = "c:\k\kube-env.json"
+$nodeTaints = "NodeBooting=true:NoSchedule,os=windows:NoSchedule"
 $WorkingDir = "c:\k"
+$kubeEnvPath = "$workingDir\kube-env.json"
+
 $CNIPath = [Io.path]::Combine($WorkingDir , "cni")
-$NetworkMode = "L2Bridge"
 $CNIConfig = [Io.path]::Combine($CNIPath, "config", "$NetworkMode.conf")
 
 $endpointName = "cbr0"
 $vnicName = "vEthernet ($endpointName)"
 
-$nodeTaints = "NodeBooting=true:NoSchedule,os=windows:NoSchedule"
+
 
 function
 Get-ClusterInfo() {
@@ -21,19 +22,21 @@ Get-ClusterInfo() {
         $clusterCIDR = $kubeEnv.CLUSTER_IP_RANGE
         $serviceCIDR = $kubeEnv.SERVICE_CLUSTER_IP_RANGE
         $kubeDnsServiceIp = $kubeEnv.DNS_SERVER_IP
+        $dnsDomain = $kubeEnv.DNS_DOMAIN
+        $kubeDnsSuffix = "svc.$dnsDomain"
     } else {
         Write-Host "Kube env file ($kubeEnvPath) missing"
         Exit 1
     }
 
-    if (!$clusterCIDR -Or !$serviceCIDR -Or !$kubeDnsServiceIp) {
+    if (!$clusterCIDR -Or !$serviceCIDR -Or !$kubeDnsServiceIp -Or !$dnsDomain) {
         Write-Host "Error occurred while determining cluster info"
         Exit 1
     }
-    return $clusterCIDR, $serviceCIDR, $kubeDnsServiceIp
+    return $clusterCIDR, $serviceCIDR, $kubeDnsServiceIp, $kubeDnsSuffix
 }
 
-$clusterCIDR, $serviceCIDR, $kubeDnsServiceIp = Get-ClusterInfo
+$clusterCIDR, $serviceCIDR, $kubeDnsServiceIp, $kubeDnsSuffix = Get-ClusterInfo
 
 function
 Get-PodGateway($podCIDR)
@@ -140,7 +143,8 @@ Update-CNIConfig($podCIDR)
      }]
   },
   "dns" : {
-    "Nameservers" : [ "<kubeDnsServiceIp>" ]
+    "Nameservers" : [ "11.0.0.10" ],
+    "Search": [ "svc.cluster.local" ]
   },
   "AdditionalArgs" : [
     {
@@ -160,7 +164,8 @@ Update-CNIConfig($podCIDR)
     $configJson.name = $NetworkMode.ToLower()
     $configJson.ipam.subnet=$podCIDR
     $configJson.ipam.routes[0].GW = Get-PodEndpointGateway $podCIDR
-    $configJson.dns.Nameservers[0] = $kubeDnsServiceIp
+    $configJson.dns.Nameservers[0] = $KubeDnsServiceIp
+    $configJson.dns.Search[0] = $KubeDnsSuffix
 
     $configJson.AdditionalArgs[0].Value.ExceptionList[0] = $clusterCIDR
     $configJson.AdditionalArgs[0].Value.ExceptionList[1] = $serviceCIDR
@@ -212,15 +217,16 @@ if (-not $podCidrDiscovered)
 
 # startup the service
 ipmo C:\k\hns.psm1
+$hnsNetwork = Get-HnsNetwork | ? Name -EQ $NetworkMode.ToLower()
 
-$hnsNetwork = Get-HnsNetworks | ? Name -EQ $NetworkMode.ToLower()
+if ($hnsNetwork)
+{
+    # Cleanup all containers
+    docker ps -q | foreach {docker rm $_ -f}
 
-if ($hnsNetwork) {
-    # Remove any existing HNS networks. This is a workaround for Internet/NAT routing issues
-    # that occur if the interface is reused or already exists (after a reboot).
-    $hnsNetwork | Remove-HnsNetwork
-    # Sleep to give time for interfaces/connections to reset
-    Start-Sleep 15
+    Write-Host "Cleaning up old HNS network found"
+    Remove-HnsNetwork $hnsNetwork
+    Start-Sleep 10
 }
 
 $podGW = Get-PodGateway $podCIDR

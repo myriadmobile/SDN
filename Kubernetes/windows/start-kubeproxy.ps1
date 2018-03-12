@@ -1,12 +1,9 @@
 param(
     [int]$Verbosity=0
+    $NetworkMode = "L2Bridge"
 )
 
-$bridgeName = "l2bridge"
-$env:KUBE_NETWORK="$bridgeName"
-
-# Remove existing HNS Policy Lists. This is a workaround for Internet/NAT routing issues
+$env:KUBE_NETWORK=$NetworkMode.ToLower()
 ipmo C:\k\hns.psm1
-Get-HNSPolicyLists | Remove-HNSPolicyList
-
+Get-HNSPolicyList | Remove-HNSPolicyList
 c:\k\kube-proxy.exe --v=$Verbosity --proxy-mode=kernelspace --hostname-override=$(hostname) --kubeconfig=c:\k\config
