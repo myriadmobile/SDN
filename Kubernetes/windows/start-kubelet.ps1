@@ -11,6 +11,7 @@ $CNIConfig = [Io.path]::Combine($CNIPath, "config", "$NetworkMode.conf")
 $endpointName = "cbr0"
 $vnicName = "vEthernet ($endpointName)"
 
+$nodeTaints = "NodeBooting=true:NoSchedule,os=windows:NoSchedule"
 
 function
 Get-ClusterInfo() {
@@ -190,7 +191,7 @@ $podCidrDiscovered = Test-PodCIDR $podCIDR
 if (-not $podCidrDiscovered)
 {
     Invoke-EnsureGoogleMetadataRoute
-    $argList = @("--hostname-override=$(hostname)","--pod-infra-container-image=kubeletwin/pause","--resolv-conf=""""", "--kubeconfig=c:\k\config","--cloud-provider=gce","--register-with-taints=NodeBooting=true:NoSchedule")
+    $argList = @("--hostname-override=$(hostname)","--pod-infra-container-image=kubeletwin/pause","--resolv-conf=""""", "--kubeconfig=c:\k\config","--cloud-provider=gce","--register-with-taints=$nodeTaints")
 
     $process = Start-Process -FilePath c:\k\kubelet.exe -PassThru -ArgumentList $argList
 
@@ -245,4 +246,4 @@ c:\k\kubelet.exe --hostname-override=$(hostname) --v=$Verbosity `
     --image-pull-progress-deadline=20m --cgroups-per-qos=false `
     --enforce-node-allocatable="" `
     --network-plugin=cni --cni-bin-dir="c:\k\cni" --cni-conf-dir "c:\k\cni\config" `
-    --cloud-provider=gce --register-with-taints=NodeBooting=true:NoSchedule
+    --cloud-provider=gce --register-with-taints="$nodeTaints"
