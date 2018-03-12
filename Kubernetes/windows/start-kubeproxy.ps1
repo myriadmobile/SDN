@@ -1,5 +1,5 @@
 param(
-    [int]$Verbosity=0
+    [int]$Verbosity=0,
     $NetworkMode = "L2Bridge"
 )
 
